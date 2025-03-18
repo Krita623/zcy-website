@@ -1,0 +1,23 @@
+# Netlify配置文件
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# 为所有路由添加Next.js处理
+[[redirects]]
+  from = "/*"
+  to = "/_next/static/:splat"
+  status = 200
+  force = true
+  conditions = {Path = ["/_next/static/*"]}
+
+[[redirects]]
+  from = "/*"
+  to = "/404"
+  status = 404
+
+[build.environment]
+  NEXT_PUBLIC_USE_GITHUB_API = "true"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
