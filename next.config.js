@@ -1,12 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // 不再需要静态导出设置
-  // output: 'export',
-  // distDir: 'out',
-  // images: {
-  //   unoptimized: true,
-  // },
+  // 启用静态导出设置
+  output: 'export',
+  distDir: 'out',
+  images: {
+    unoptimized: true,
+  },
 
   // 添加公共环境变量配置
   publicRuntimeConfig: {
