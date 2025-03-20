@@ -1,13 +1,8 @@
-import fs from 'fs';
-import path from 'path';
 import matter from 'gray-matter';
 import { Solution, SolutionFormData } from '../types';
 import siteConfig from '../../site.config';
 import { getFileContent, saveFileContent, deleteFile } from './github';
 import { triggerNetlifyBuild, isProduction } from './netlify';
-
-// 获取题解文件夹路径
-const solutionsDirectory = path.join(process.cwd(), siteConfig.solutions.contentPath);
 
 // GitHub仓库信息 - 添加到环境变量中
 const GITHUB_OWNER = process.env.NEXT_PUBLIC_GITHUB_OWNER || '';
@@ -15,235 +10,271 @@ const GITHUB_REPO = process.env.NEXT_PUBLIC_GITHUB_REPO || '';
 const GITHUB_SOLUTIONS_PATH = process.env.NEXT_PUBLIC_GITHUB_SOLUTIONS_PATH || 'content/solutions';
 const USE_GITHUB_API = process.env.NEXT_PUBLIC_USE_GITHUB_API === 'true';
 
-// 确保目录存在
-export function ensureSolutionsDirectoryExists() {
-  if (!fs.existsSync(solutionsDirectory)) {
-    fs.mkdirSync(solutionsDirectory, { recursive: true });
+// 重试配置
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000; // 1秒
+
+// 延迟函数
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 带重试的API调用
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  maxRetries: number = MAX_RETRIES
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries) {
+        console.warn(`Attempt ${attempt} failed, retrying in ${RETRY_DELAY}ms...`);
+        await delay(RETRY_DELAY * attempt); // 指数退避
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+// 验证GitHub配置
+function validateGitHubConfig() {
+  if (!GITHUB_OWNER || !GITHUB_REPO) {
+    throw new Error('GitHub configuration is incomplete. Please check your environment variables.');
   }
 }
 
 // 获取所有题解
 export async function getAllSolutions(): Promise<Solution[]> {
   try {
-    ensureSolutionsDirectoryExists();
+    validateGitHubConfig();
     
-    // 读取目录中的所有文件
-    const filenames = fs.readdirSync(solutionsDirectory);
-    const solutions = filenames
-      .filter(filename => filename.endsWith('.md'))
-      .map(filename => {
-        // 从文件名中获取slug
-        const slug = filename.replace(/\.md$/, '');
-        
-        // 获取题解数据
-        const solution = getSolutionBySlug(slug);
-        return solution;
-      })
-      .filter((solution): solution is Solution => solution !== null);
+    console.log('Fetching solutions from GitHub...');
     
-    // 按日期降序排序（最新的在前面）
-    return solutions.sort((a, b) => {
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
+    // 使用GitHub API获取文件列表
+    const response = await withRetry(async () => {
+      const res = await fetch(
+        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${GITHUB_SOLUTIONS_PATH}`,
+        {
+          headers: {
+            'Accept': 'application/vnd.github.v3+json',
+          },
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch solutions list: ${res.status} ${res.statusText}`);
+      }
+
+      return res;
     });
+
+    const files = await response.json();
+    console.log(`Found ${files.length} files in solutions directory`);
+    
+    const solutions: Solution[] = [];
+
+    // 并行获取所有题解内容
+    const solutionPromises = files
+      .filter((file: any) => file.type === 'file' && file.name.endsWith('.md'))
+      .map(async (file: any) => {
+        try {
+          console.log(`Processing solution file: ${file.name}`);
+          const { content } = await withRetry(() => 
+            getFileContent(
+              GITHUB_OWNER,
+              GITHUB_REPO,
+              `${GITHUB_SOLUTIONS_PATH}/${file.name}`
+            )
+          );
+          
+          const { data, content: markdownContent } = matter(content);
+          return {
+            slug: file.name.replace(/\.md$/, ''),
+            title: data.title || '',
+            date: data.date || new Date().toISOString(),
+            difficulty: data.difficulty || 'medium',
+            excerpt: data.excerpt || '',
+            content: markdownContent,
+            tags: data.tags || [],
+          };
+        } catch (error) {
+          console.error(`Error processing solution ${file.name}:`, error);
+          return null;
+        }
+      });
+
+    const results = await Promise.allSettled(solutionPromises);
+    solutions.push(...results
+      .filter((result): result is PromiseFulfilledResult<Solution> => 
+        result.status === 'fulfilled' && result.value !== null
+      )
+      .map(result => result.value)
+    );
+
+    console.log(`Successfully processed ${solutions.length} solutions`);
+    return solutions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   } catch (error) {
-    console.error('Error getting all solutions:', error);
+    console.error('Error fetching solutions:', error);
     return [];
   }
 }
 
-// 通过slug获取单个题解
-export function getSolutionBySlug(slug: string): Solution | null {
+// 获取单个题解
+export async function getSolutionBySlug(slug: string): Promise<Solution | null> {
   try {
-    ensureSolutionsDirectoryExists();
+    validateGitHubConfig();
     
-    const fullPath = path.join(solutionsDirectory, `${slug}.md`);
+    const { content } = await withRetry(() => 
+      getFileContent(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${slug}.md`
+      )
+    );
     
-    // 如果文件不存在，返回null
-    if (!fs.existsSync(fullPath)) {
-      return null;
-    }
-    
-    // 读取文件内容
-    const fileContents = fs.readFileSync(fullPath, 'utf8');
-    
-    // 使用gray-matter解析frontmatter元数据
-    const { data, content } = matter(fileContents);
-    
-    // 验证必要的元数据
-    if (!data.title || !data.date || !data.difficulty) {
-      return null;
-    }
-    
+    const { data, content: markdownContent } = matter(content);
     return {
       slug,
-      title: data.title,
-      date: data.date,
-      difficulty: data.difficulty,
+      title: data.title || '',
+      date: data.date || new Date().toISOString(),
+      difficulty: data.difficulty || 'medium',
       excerpt: data.excerpt || '',
-      content,
+      content: markdownContent,
       tags: data.tags || [],
     };
   } catch (error) {
-    console.error(`Error getting solution by slug "${slug}":`, error);
+    console.error('Error fetching solution:', error);
     return null;
   }
 }
 
-// 创建或更新题解
-export async function saveSolution(formData: SolutionFormData, isEditing: boolean = false): Promise<{ success: boolean; error?: string }> {
+// 创建新题解
+export async function createSolution(solution: SolutionFormData): Promise<boolean> {
   try {
-    ensureSolutionsDirectoryExists();
+    validateGitHubConfig();
     
-    const { slug, title, difficulty, excerpt, content, tags } = formData;
-    
-    // 构建frontmatter
-    const frontmatter = {
-      title,
-      date: new Date().toISOString(),
-      difficulty,
-      excerpt: excerpt || '',
-      tags: tags || [],
-    };
-    
-    // 将frontmatter和内容组合
-    const fileContent = matter.stringify(content, frontmatter);
-    
-    // 文件路径
-    const filePath = path.join(solutionsDirectory, `${slug}.md`);
-    
-    if (USE_GITHUB_API) {
-      try {
-        // GitHub中的路径
-        const githubPath = `${GITHUB_SOLUTIONS_PATH}/${slug}.md`;
-        
-        let sha: string | undefined;
-        
-        // 如果是编辑，需要先获取文件SHA
-        if (isEditing) {
-          try {
-            const fileData = await getFileContent(GITHUB_OWNER, GITHUB_REPO, githubPath);
-            sha = fileData.sha;
-          } catch (error) {
-            console.warn(`File ${githubPath} not found in GitHub, will create it`);
-          }
-        }
-        
-        // 保存到GitHub
-        await saveFileContent(
-          GITHUB_OWNER,
-          GITHUB_REPO,
-          githubPath,
-          fileContent,
-          isEditing ? `更新题解: ${title}` : `新增题解: ${title}`,
-          sha
-        );
-        
-        // 同时保存到本地文件系统（作为缓存）
-        fs.writeFileSync(filePath, fileContent);
-        
-        // 如果是生产环境，触发Netlify构建
-        if (isProduction()) {
-          console.log('正在触发Netlify构建...');
-          await triggerNetlifyBuild();
-        }
-        
-        return { success: true };
-      } catch (error: any) {
-        console.error('Error saving solution to GitHub:', error);
-        
-        // 尝试退回到本地保存
-        fs.writeFileSync(filePath, fileContent);
-        
-        return { 
-          success: false, 
-          error: `GitHub API 操作失败: ${error.message || '未知错误'}. 已保存到本地，但未推送到 GitHub.` 
-        };
-      }
-    } else {
-      // 仅保存到本地文件系统
-      fs.writeFileSync(filePath, fileContent);
-      return { success: true };
+    // 验证必填字段
+    if (!solution.title || !solution.slug || !solution.content) {
+      throw new Error('Missing required fields');
     }
-  } catch (error: any) {
-    console.error('Error saving solution:', error);
-    return { 
-      success: false, 
-      error: `保存题解失败: ${error.message || '未知错误'}` 
-    };
+
+    const content = `---
+title: ${solution.title}
+date: ${new Date().toISOString()}
+difficulty: ${solution.difficulty}
+excerpt: ${solution.excerpt || ''}
+tags: ${JSON.stringify(solution.tags || [])}
+---
+
+${solution.content}`;
+
+    await withRetry(() => 
+      saveFileContent(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${solution.slug}.md`,
+        content,
+        `Add solution: ${solution.title}`
+      )
+    );
+
+    // 触发Netlify重新构建
+    if (typeof isProduction === 'function' && isProduction()) {
+      await triggerNetlifyBuild();
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error creating solution:', error);
+    return false;
+  }
+}
+
+// 更新题解
+export async function updateSolution(slug: string, solution: SolutionFormData): Promise<boolean> {
+  try {
+    validateGitHubConfig();
+    
+    // 验证必填字段
+    if (!solution.title || !solution.content) {
+      throw new Error('Missing required fields');
+    }
+
+    const { sha } = await withRetry(() => 
+      getFileContent(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${slug}.md`
+      )
+    );
+
+    const content = `---
+title: ${solution.title}
+date: ${new Date().toISOString()}
+difficulty: ${solution.difficulty}
+excerpt: ${solution.excerpt || ''}
+tags: ${JSON.stringify(solution.tags || [])}
+---
+
+${solution.content}`;
+
+    await withRetry(() => 
+      saveFileContent(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${slug}.md`,
+        content,
+        `Update solution: ${solution.title}`,
+        sha
+      )
+    );
+
+    // 触发Netlify重新构建
+    if (typeof isProduction === 'function' && isProduction()) {
+      await triggerNetlifyBuild();
+    }
+
+    return true;
+  } catch (error) {
+    console.error('Error updating solution:', error);
+    return false;
   }
 }
 
 // 删除题解
-export async function deleteSolution(slug: string): Promise<{ success: boolean; error?: string }> {
+export async function deleteSolution(slug: string): Promise<boolean> {
   try {
-    ensureSolutionsDirectoryExists();
-    
-    const filePath = path.join(solutionsDirectory, `${slug}.md`);
-    
-    // 检查文件是否存在
-    if (!fs.existsSync(filePath)) {
-      return { success: false, error: '题解不存在' };
+    validateGitHubConfig();
+
+    const { sha } = await withRetry(() => 
+      getFileContent(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${slug}.md`
+      )
+    );
+
+    await withRetry(() => 
+      deleteFile(
+        GITHUB_OWNER,
+        GITHUB_REPO,
+        `${GITHUB_SOLUTIONS_PATH}/${slug}.md`,
+        `Delete solution: ${slug}`,
+        sha
+      )
+    );
+
+    // 触发Netlify重新构建
+    if (typeof isProduction === 'function' && isProduction()) {
+      await triggerNetlifyBuild();
     }
-    
-    if (USE_GITHUB_API) {
-      try {
-        // GitHub中的路径
-        const githubPath = `${GITHUB_SOLUTIONS_PATH}/${slug}.md`;
-        
-        // 先获取文件SHA
-        try {
-          const fileData = await getFileContent(GITHUB_OWNER, GITHUB_REPO, githubPath);
-          
-          // 从GitHub中删除
-          await deleteFile(
-            GITHUB_OWNER,
-            GITHUB_REPO,
-            githubPath,
-            `删除题解: ${slug}`,
-            fileData.sha
-          );
-          
-          // 同时从本地文件系统删除
-          fs.unlinkSync(filePath);
-          
-          // 如果是生产环境，触发Netlify构建
-          if (isProduction()) {
-            console.log('正在触发Netlify构建...');
-            await triggerNetlifyBuild();
-          }
-          
-          return { success: true };
-        } catch (error: any) {
-          // 如果GitHub中找不到文件，仅删除本地文件
-          console.warn(`File ${githubPath} not found in GitHub, only deleting local file`);
-          fs.unlinkSync(filePath);
-          
-          return { 
-            success: true, 
-            error: `警告: GitHub API 操作失败，但已从本地删除: ${error.message || '未知错误'}` 
-          };
-        }
-      } catch (error: any) {
-        console.error('Error deleting solution from GitHub:', error);
-        
-        // 尝试退回到仅本地删除
-        fs.unlinkSync(filePath);
-        
-        return { 
-          success: false, 
-          error: `GitHub API 操作失败: ${error.message || '未知错误'}. 已从本地删除，但未从 GitHub 删除.` 
-        };
-      }
-    } else {
-      // 仅从本地文件系统删除
-      fs.unlinkSync(filePath);
-      return { success: true };
-    }
-  } catch (error: any) {
+
+    return true;
+  } catch (error) {
     console.error('Error deleting solution:', error);
-    return { 
-      success: false, 
-      error: `删除题解失败: ${error.message || '未知错误'}` 
-    };
+    return false;
   }
 } 

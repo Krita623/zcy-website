@@ -3,6 +3,9 @@ import Link from 'next/link';
 import { getAllSolutions } from '../../lib/solutions';
 import SolutionList from '../../components/SolutionList';
 
+// 禁用页面缓存，确保每次访问都获取最新数据
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: '题解列表',
   description: '浏览所有编程题解，包括算法、数据结构等各种类型的题目',

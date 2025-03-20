@@ -5,6 +5,9 @@ import siteConfig from '../../site.config';
 import SolutionCard from '../components/SolutionCard';
 import { getAllSolutions } from '../lib/solutions';
 
+// 禁用页面缓存，确保每次访问都获取最新数据
+export const dynamic = 'force-dynamic';
+
 export default async function HomePage() {
   // 获取最近的题解，限制数量
   const solutions = await getAllSolutions();

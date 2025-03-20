@@ -12,6 +12,8 @@ interface AdminSolutionListProps {
 }
 
 export default function AdminSolutionList({ solutions }: AdminSolutionListProps) {
+  console.log('AdminSolutionList rendering with solutions:', solutions.length);
+  
   const handleDelete = async (slug: string) => {
     if (window.confirm('确定要删除这个题解吗？此操作不可恢复。')) {
       try {
@@ -36,10 +38,8 @@ export default function AdminSolutionList({ solutions }: AdminSolutionListProps)
           alert('题解已成功删除');
         }
         
-        // 给服务器一些时间处理更改
-        setTimeout(() => {
-          window.location.reload(); // 删除后刷新页面
-        }, 500);
+        // 强制刷新页面以显示最新数据
+        window.location.reload();
       } catch (error: any) {
         console.error('删除题解失败', error);
         
@@ -69,7 +69,11 @@ export default function AdminSolutionList({ solutions }: AdminSolutionListProps)
                 <div className="flex min-w-0 flex-1 items-center">
                   <div className="min-w-0 flex-1 px-4 md:grid md:grid-cols-2 md:gap-4">
                     <div>
-                      <p className="truncate text-sm font-medium text-blue-600">{solution.title}</p>
+                      <p className="truncate text-sm font-medium text-blue-600">
+                        <Link href={`/solutions/${solution.slug}`}>
+                          {solution.title}
+                        </Link>
+                      </p>
                       <p className="mt-2 flex items-center text-sm text-gray-500">
                         <span className="truncate">
                           {format(new Date(solution.date), 'yyyy年MM月dd日', { locale: zhCN })}

@@ -111,10 +111,9 @@ export default function SolutionForm({ initialData, isEditing }: SolutionFormPro
         alert('题解已成功保存');
       }
       
-      // 给服务器一些时间处理更改
-      setTimeout(() => {
-        window.location.href = '/admin';
-      }, 500);
+      // 强制刷新页面以显示最新数据
+      router.refresh();
+      router.push('/admin');
     } catch (error: any) {
       console.error('保存题解失败', error);
       
