@@ -60,7 +60,9 @@ export async function getAllSolutions(): Promise<Solution[]> {
         {
           headers: {
             'Accept': 'application/vnd.github.v3+json',
+            // 已移除认证, 因为对于公开仓库无需身份验证即可读取
           },
+          cache: 'no-store',
         }
       );
 

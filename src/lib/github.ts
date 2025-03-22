@@ -86,11 +86,9 @@ export async function getFileContent(
       'Accept': 'application/vnd.github.v3+json',
     };
 
+    // 对于公共仓库，允许无认证访问
     if (token) {
       headers['Authorization'] = `token ${token}`;
-    } else {
-      console.warn('No GitHub token found. Authentication required for operation.');
-      throw new Error('未获取GitHub授权。请确保您已登录并授权应用使用GitHub API。');
     }
 
     const apiUrl = `${GITHUB_API_URL}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSolution, updateSolution, deleteSolution } from '../../../lib/solutions';
+import { createSolution, updateSolution, deleteSolution, getAllSolutions, getSolutionBySlug } from '../../../lib/solutions';
 import { SolutionFormData } from '../../../types';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../../lib/auth';
@@ -11,6 +11,38 @@ async function validateSession() {
     return false;
   }
   return true;
+}
+
+// 获取题解 - 无需身份验证
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const slug = searchParams.get('slug');
+    
+    // 如果有指定slug，则获取特定题解
+    if (slug) {
+      const solution = await getSolutionBySlug(slug);
+      
+      if (!solution) {
+        return NextResponse.json(
+          { error: '未找到题解' },
+          { status: 404 }
+        );
+      }
+      
+      return NextResponse.json(solution);
+    }
+    
+    // 否则获取所有题解
+    const solutions = await getAllSolutions();
+    return NextResponse.json(solutions);
+  } catch (error: any) {
+    console.error('获取题解失败:', error);
+    return NextResponse.json(
+      { error: `获取题解失败: ${error.message || '未知错误'}` },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(request: NextRequest) {
