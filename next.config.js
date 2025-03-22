@@ -1,9 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // 启用静态导出设置
-  output: 'export',
-  distDir: 'out',
+  // 注释掉静态导出设置
+  // output: 'export',
+  // distDir: 'out',
   images: {
     unoptimized: true,
   },
